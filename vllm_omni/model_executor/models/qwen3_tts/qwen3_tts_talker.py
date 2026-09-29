@@ -545,7 +545,7 @@ class Qwen3TTSTalkerForConditionalGeneration(nn.Module):
             torch.zeros(1, int(self.talker_config.hidden_size), dtype=model_dtype),
             persistent=False,
         )
-        self._embedding_dtype = torch.bfloat16
+        self._embedding_dtype = model_dtype
 
         tokenizer_config = Qwen3TTSTokenizerV2Config.from_pretrained(
             self.model_path,
@@ -555,7 +555,7 @@ class Qwen3TTSTalkerForConditionalGeneration(nn.Module):
             tokenizer_config.encoder_config,
         )
         self.encoder.eval()
-        self.encoder.to(dtype=torch.bfloat16)
+        self.encoder.to(dtype=model_dtype)
         self._encoder_valid_num_quantizers = int(tokenizer_config.encoder_valid_num_quantizers)
         self._encoder_downsample_rate = int(tokenizer_config.encode_downsample_rate)
 
