@@ -3,7 +3,8 @@
 """Regression test: Qwen3-TTS embedding dtype must follow model_config.dtype.
 
 ``_embedding_dtype`` (talker and prompt builder) used to be hardcoded to
-``torch.bfloat16``, so serving with ``--dtype=half`` mixed bf16 and half tensors.
+``torch.bfloat16``, so serving with ``--dtype=half`` could mix incompatible
+tensor dtypes.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 _MOD = "vllm_omni.model_executor.models.qwen3_tts.qwen3_tts_talker"
 
 # Heavy collaborators of Qwen3TTSTalkerForConditionalGeneration.__init__.
+# Keep Qwen3TTSPromptEmbedsBuilder real so its hardcoded bf16 default is
+# actually exercised by this regression test.
 _PATCHED_NAMES = [
     "Qwen3Model",
     "ParallelLMHead",
@@ -31,11 +34,9 @@ _PATCHED_NAMES = [
     "Qwen3TTSTokenizerV2Config",
     "Qwen3TTSTokenizerV2Encoder",
     "AutoFeatureExtractor",
-    "Qwen3TTSPromptEmbedsBuilder",
     "get_speaker_cache",
     "maybe_prefix",
     "talker_first_audio_enabled",
-    "_ref_audio_artifact_cache_capacity",
     "_qwen3_tts_gpu_resident_buffer_keys",
 ]
 
@@ -53,7 +54,10 @@ def _make_vllm_config(dtype: torch.dtype):
     )
     model_config = SimpleNamespace(
         model="dummy/path",
-        hf_config=SimpleNamespace(talker_config=talker_config, speaker_encoder_config=None),
+        hf_config=SimpleNamespace(
+            talker_config=talker_config,
+            speaker_encoder_config=None,
+        ),
         dtype=dtype,
         silence_ban_frames=0,
         use_v2_model_runner=False,
@@ -67,20 +71,43 @@ def _make_vllm_config(dtype: torch.dtype):
     )
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
-def test_talker_and_prompt_builder_dtype_follow_model_dtype(mocker: MockerFixture, dtype: torch.dtype) -> None:
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.float16, torch.bfloat16, torch.float32],
+)
+def test_talker_and_prompt_builder_dtype_follow_model_dtype(
+    mocker: MockerFixture,
+    dtype: torch.dtype,
+) -> None:
     talker_mod = importlib.import_module(_MOD)
 
     for name in _PATCHED_NAMES:
         mocker.patch(f"{_MOD}.{name}")
-    mocker.patch(f"{_MOD}.get_pp_group", return_value=SimpleNamespace(is_last_rank=True))
-    mocker.patch("vllm.config.vllm.set_current_vllm_config", return_value=nullcontext())
-    mocker.patch.object(talker_mod.Qwen3TTSTalkerForConditionalGeneration, "_load_custom_voice_profiles")
 
-    talker = talker_mod.Qwen3TTSTalkerForConditionalGeneration(vllm_config=_make_vllm_config(dtype))
+    mocker.patch(
+        f"{_MOD}.get_pp_group",
+        return_value=SimpleNamespace(is_last_rank=True),
+    )
+    mocker.patch(
+        "vllm.config.vllm.set_current_vllm_config",
+        return_value=nullcontext(),
+    )
+    mocker.patch.object(
+        talker_mod.Qwen3TTSTalkerForConditionalGeneration,
+        "_load_custom_voice_profiles",
+    )
 
-    # Regression: both used to be pinned to torch.bfloat16.
+    talker = talker_mod.Qwen3TTSTalkerForConditionalGeneration(
+        vllm_config=_make_vllm_config(dtype),
+    )
+
+    # Regression: talker used to be pinned to torch.bfloat16.
     assert talker._embedding_dtype == dtype
+
+    # Regression: the real prompt builder still initializes its dtype to
+    # torch.bfloat16, so the talker must explicitly propagate model_dtype
+    # after constructing it.
     assert talker._prompt_builder._embedding_dtype == dtype
-    # The constant pad embedding must agree, or index_copy_ breaks again.
+
+    # The constant pad embedding must agree with the selected model dtype.
     assert talker._tts_pad_embed.dtype == dtype
