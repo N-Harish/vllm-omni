@@ -29,7 +29,7 @@ _PATCHED_NAMES = [
     "ParallelLMHead",
     "LogitsProcessor",
     "Qwen3TTSTalkerResizeMLP",
-    "Qwen3TTSSpeakerEncoder",
+    "ECAPATimeDelayNet",
     "Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM",
     "Qwen3TTSTokenizerV2Config",
     "Qwen3TTSTokenizerV2Encoder",
@@ -83,6 +83,11 @@ def test_talker_and_prompt_builder_dtype_follow_model_dtype(
 
     for name in _PATCHED_NAMES:
         mocker.patch(f"{_MOD}.{name}")
+
+    mocker.patch(
+        f"{_MOD}.talker_stream_decode_enabled",
+        return_value=False,
+    )
 
     mocker.patch(
         f"{_MOD}.get_pp_group",
